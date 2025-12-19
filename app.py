@@ -1330,139 +1330,6 @@ def get_client_ip():
         return request.headers.get('X-Forwarded-For').split(',')[0].strip()
     return request.remote_addr
 
-def generate_verification_code():
-    """Generate a 6-digit verification code."""
-    import random
-    return str(random.randint(100000, 999999))
-
-# Email Verification Helper Functions
-def send_verification_email(customer_email, customer_name, verification_code):
-    """Send email verification code to customer."""
-    if not app.config.get('MAIL_PASSWORD') or not app.config.get('MAIL_USERNAME'):
-        return False, 'Email service is not configured.'
-    
-    try:
-        sender = app.config.get('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME', 'noreply@cafenextdoor.com'))
-        subject = 'Email Verification Code - Cafe Next Door'
-        body = f'''Hello {customer_name or 'Customer'},
-
-Thank you for registering with Cafe Next Door!
-
-Your email verification code is: {verification_code}
-
-This code will expire in 15 minutes.
-
-If you didn't request this code, please ignore this email.
-
-Best regards,
-Cafe Next Door Team'''
-        
-        msg = Message(
-            subject=subject,
-            recipients=[customer_email],
-            body=body,
-            sender=sender
-        )
-        mail.send(msg)
-        print(f"Verification email sent successfully to {customer_email}")
-        return True, None
-    except Exception as e:
-        import traceback
-        error_msg = f'Error sending verification email: {str(e)}'
-        print(error_msg)
-        print(traceback.format_exc())
-        return False, error_msg
-
-def create_verification_code(customer_id, customer_email, conn):
-    """Create and save a verification code for a customer."""
-    try:
-        # Generate code
-        code = generate_verification_code()
-        expires_at = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Ensure email_verifications table exists
-        try:
-            conn.execute('''
-                INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
-                VALUES (?, ?, ?, ?)
-            ''', (customer_id, customer_email, code, expires_at))
-            conn.commit()
-            return code, None
-        except sqlite3.OperationalError as e:
-            # Table might not exist, create it
-            if 'no such table' in str(e).lower():
-                conn.execute('''
-                    CREATE TABLE IF NOT EXISTS email_verifications (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        customer_id INTEGER NOT NULL,
-                        email TEXT NOT NULL,
-                        verification_code TEXT NOT NULL,
-                        is_verified INTEGER DEFAULT 0,
-                        expires_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (customer_id) REFERENCES customers (id)
-                    )
-                ''')
-                conn.commit()
-                # Retry insert
-                conn.execute('''
-                    INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
-                    VALUES (?, ?, ?, ?)
-                ''', (customer_id, customer_email, code, expires_at))
-                conn.commit()
-                return code, None
-            raise
-    except Exception as e:
-        import traceback
-        error_msg = f'Error creating verification code: {str(e)}'
-        print(error_msg)
-        print(traceback.format_exc())
-        return None, error_msg
-
-def verify_email_code(customer_id, code, conn):
-    """Verify an email verification code."""
-    try:
-        # Get the latest unverified code
-        verification = conn.execute('''
-            SELECT * FROM email_verifications 
-            WHERE customer_id = ? AND verification_code = ? AND is_verified = 0
-            ORDER BY created_at DESC LIMIT 1
-        ''', (customer_id, code)).fetchone()
-        
-        if not verification:
-            return False, 'Invalid verification code.'
-        
-        # Convert Row to dict
-        verification = dict(verification) if not isinstance(verification, dict) else verification
-        
-        # Check expiration
-        if verification.get('expires_at'):
-            try:
-                expires_at = datetime.strptime(verification['expires_at'], '%Y-%m-%d %H:%M:%S')
-                if datetime.now() > expires_at:
-                    return False, 'Verification code has expired. Please request a new one.'
-            except (ValueError, TypeError):
-                pass  # If we can't parse, assume valid
-        
-        # Mark as verified
-        conn.execute('UPDATE email_verifications SET is_verified = 1 WHERE id = ?', (verification['id'],))
-        
-        # Update customer email_verified status
-        try:
-            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (customer_id,))
-        except sqlite3.OperationalError:
-            # Column doesn't exist, add it
-            conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
-            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (customer_id,))
-        
-        conn.commit()
-        return True, None
-    except Exception as e:
-        import traceback
-        error_msg = f'Error verifying code: {str(e)}'
-        print(error_msg)
-        print(traceback.format_exc())
-        return False, error_msg
 
 def check_blacklist(customer_id=None, email=None, phone=None):
     """Check if customer is blacklisted."""
@@ -1497,33 +1364,6 @@ def is_phone_verified(customer_id):
     conn.close()
     return customer and customer['phone_verified'] == 1
 
-def is_email_verified(customer_id):
-    """Check if customer's email is verified."""
-    try:
-        conn = get_db_connection()
-        # Try to get email_verified column, if it doesn't exist, check all columns
-        try:
-            customer = conn.execute('SELECT email_verified FROM customers WHERE id = ?', (customer_id,)).fetchone()
-        except sqlite3.OperationalError:
-            # Column doesn't exist, get all columns and check
-            customer = conn.execute('SELECT * FROM customers WHERE id = ?', (customer_id,)).fetchone()
-        
-        conn.close()
-        
-        if not customer:
-            return False
-        
-        # Convert Row to dict if needed
-        if not isinstance(customer, dict):
-            customer = dict(customer)
-        
-        # Check if email_verified column exists and is set to 1
-        email_verified = customer.get('email_verified', 0)
-        return email_verified == 1
-    except Exception as e:
-        print(f"Error checking email verification: {str(e)}")
-        # If there's an error, assume not verified to be safe
-        return False
 
 def check_rate_limit(ip_address, email, message):
     """Check if the user has exceeded rate limits."""
@@ -2360,29 +2200,15 @@ def customer_register():
         # Create account
         try:
             password_hash = generate_password_hash(password)
-            # Try to insert with email_verified column
-            try:
-                conn.execute('''
-                    INSERT INTO customers (email, password_hash, first_name, last_name, phone, email_verified)
-                    VALUES (?, ?, ?, ?, ?, 0)
-                ''', (email, password_hash, first_name, last_name, phone))
-            except sqlite3.OperationalError as e:
-                # Column doesn't exist, add it first
-                if 'no such column: email_verified' in str(e).lower():
-                    print(f"Adding email_verified column: {str(e)}")
-                    conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
-                    # Now insert with email_verified (column now exists)
-                    conn.execute('''
-                        INSERT INTO customers (email, password_hash, first_name, last_name, phone, email_verified)
-                        VALUES (?, ?, ?, ?, ?, 0)
-                    ''', (email, password_hash, first_name, last_name, phone))
-                else:
-                    raise  # Re-raise if it's a different error
+            conn.execute('''
+                INSERT INTO customers (email, password_hash, first_name, last_name, phone)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (email, password_hash, first_name, last_name, phone))
             
             conn.commit()
             conn.close()
             
-            flash('Account created successfully! Please log in and verify your email address.', 'success')
+            flash('Account created successfully! Please log in.', 'success')
             return redirect(url_for('customer_login'))
         except Exception as e:
             import traceback
@@ -2463,12 +2289,10 @@ def edit_profile():
         
         # If email changed, reset verification
         email_changed = email != customer['email']
-        email_verified = 0 if email_changed else customer.get('email_verified', 0)
-
         conn.execute('''
-            UPDATE customers SET email = ?, phone = ?, first_name = ?, last_name = ?, email_verified = ?
+            UPDATE customers SET email = ?, phone = ?, first_name = ?, last_name = ?
             WHERE id = ?
-        ''', (email, phone, first_name, last_name, email_verified, session['customer_id']))
+        ''', (email, phone, first_name, last_name, session['customer_id']))
         conn.commit()
         conn.close()
 
@@ -3477,138 +3301,6 @@ def loyalty_program():
     return render_template('loyalty.html', points=dict(points), transactions=[dict(t) for t in transactions])
 
 # Password Reset Routes
-# Email Verification Routes
-@app.route('/verify-email', methods=['GET', 'POST'], endpoint='verify_email')
-@customer_login_required
-def verify_email():
-    """Email verification page - clean and simplified."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        customer = conn.execute('SELECT * FROM customers WHERE id = ?', (session['customer_id'],)).fetchone()
-        
-        if not customer:
-            if conn:
-                conn.close()
-            flash('Customer not found. Please log in again.', 'error')
-            return redirect(url_for('customer_login'))
-        
-        # Convert Row to dict
-        customer = dict(customer) if not isinstance(customer, dict) else customer
-        customer_email = customer.get('email', '')
-        
-        if not customer_email:
-            if conn:
-                conn.close()
-            flash('Email address not found. Please contact support.', 'error')
-            return redirect(url_for('customer_profile'))
-        
-        # Check if already verified
-        email_verified = customer.get('email_verified', 0) or 0
-        if email_verified == 1:
-            if conn:
-                conn.close()
-            flash('Your email is already verified.', 'success')
-            return redirect(url_for('customer_profile'))
-        
-        # Handle POST - verify code
-        if request.method == 'POST':
-            code = request.form.get('verification_code', '').strip()
-            
-            if not code:
-                if conn:
-                    conn.close()
-                flash('Please enter the verification code.', 'error')
-                return render_template('verify_email.html', customer=customer)
-            
-            # Verify the code
-            success, error_msg = verify_email_code(session['customer_id'], code, conn)
-            
-            if success:
-                if conn:
-                    conn.close()
-                flash('Email address verified successfully!', 'success')
-                return redirect(url_for('customer_profile'))
-            else:
-                if conn:
-                    conn.close()
-                flash(error_msg or 'Invalid verification code. Please try again.', 'error')
-                return render_template('verify_email.html', customer=customer)
-        
-        # GET request - show verification page
-        if conn:
-            conn.close()
-        return render_template('verify_email.html', customer=customer)
-        
-    except Exception as e:
-        import traceback
-        print(f"Error in verify_email: {str(e)}")
-        print(traceback.format_exc())
-        try:
-            if conn:
-                conn.close()
-        except:
-            pass
-        flash('An error occurred. Please try again.', 'error')
-        return redirect(url_for('customer_profile'))
-
-@app.route('/send-verification-code', methods=['POST'])
-@customer_login_required
-def send_verification_code():
-    """Send verification code to customer's email - clean and simplified."""
-    conn = None
-    try:
-        conn = get_db_connection()
-        customer = conn.execute('SELECT * FROM customers WHERE id = ?', (session['customer_id'],)).fetchone()
-
-        if not customer:
-            if conn:
-                conn.close()
-            flash('Customer not found. Please log in again.', 'error')
-            return redirect(url_for('customer_login'))
-
-        # Convert Row to dict
-        customer = dict(customer) if not isinstance(customer, dict) else customer
-        customer_email = customer.get('email', '')
-        customer_name = customer.get('first_name', 'Customer')
-
-        if not customer_email:
-            if conn:
-                conn.close()
-            flash('Email address not found. Please contact support.', 'error')
-            return redirect(url_for('customer_profile'))
-
-        # Create verification code
-        code, error_msg = create_verification_code(session['customer_id'], customer_email, conn)
-        if not code:
-            if conn:
-                conn.close()
-            flash(error_msg or 'Error generating verification code. Please try again.', 'error')
-            return redirect(url_for('verify_email'))
-
-        # Send verification email
-        email_sent, email_error = send_verification_email(customer_email, customer_name, code)
-        
-        if email_sent:
-            flash('Verification code has been sent to your email address!', 'success')
-        else:
-            flash(f'Code generated but email could not be sent: {email_error}. Please contact support.', 'warning')
-
-        if conn:
-            conn.close()
-        return redirect(url_for('verify_email'))
-        
-    except Exception as e:
-        import traceback
-        print(f"Error in send_verification_code: {str(e)}")
-        print(traceback.format_exc())
-        try:
-            if conn:
-                conn.close()
-        except:
-            pass
-        flash('An error occurred. Please try again.', 'error')
-        return redirect(url_for('verify_email'))
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
 def forgot_password():
