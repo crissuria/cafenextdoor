@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+
+{% block title %}About Us - Cafe Next Door{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="about-hero-section" style="background-image: linear-gradient(135deg, rgba(42, 24, 16, 0.75) 0%, rgba(26, 15, 8, 0.80) 100%), url('{{ url_for('static', filename='images/cnd-cafe_interior.jpg') }}'); background-size: cover; background-position: center; background-repeat: no-repeat;">
+    <div class="container">
+        <div class="about-hero-content">
+            <h1 class="about-hero-title">Your Everyday Coffee, Right Next Door.</h1>
+            <p class="about-hero-subtitle">Cafe Next Door is more than a café — it's a familiar place where mornings feel lighter, conversations last longer, and coffee feels like home.</p>
+            <div class="about-hero-buttons">
+                <a href="{{ url_for('menu') }}" class="btn btn-primary">See Our Menu</a>
+                <a href="{{ url_for('contact') }}" class="btn btn-secondary">Visit Us Today</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Our Story Section -->
+<div class="about-section">
+    <div class="container">
+        <div class="about-content-wrapper">
+            <div class="about-text-content">
+                <h2 class="about-section-title">Our Story</h2>
+                <div class="about-text">
+                    <p>Cafe Next Door was born from a simple idea: everyone deserves a place that feels familiar, even on their busiest days.</p>
+                    <p>We started as a small neighborhood café with big heart — serving honest coffee, warm meals, and a space where people can slow down, even just for a moment.</p>
+                    <p>Whether you're stopping by before work, meeting a friend, or sitting quietly with your thoughts, Cafe Next Door was made to feel like your place.</p>
+                </div>
+            </div>
+            <div class="about-image-placeholder">
+                <img src="{{ url_for('static', filename='images/cnd-our_story.jpg') }}" alt="Our Story - Cafe Next Door" class="about-section-image">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Why We Exist Section -->
+<div class="about-section about-section-alt">
+    <div class="container">
+        <h2 class="about-section-title">Why We Exist</h2>
+        <div class="why-we-exist-grid">
+            <div class="why-item">
+                <div class="why-icon">☕</div>
+                <h3>Good Coffee, No Pretension</h3>
+                <p>To serve good coffee without pretension</p>
+            </div>
+            <div class="why-item">
+                <div class="why-icon">🏠</div>
+                <h3>Safe & Welcoming</h3>
+                <p>To create a space that feels safe, calm, and welcoming</p>
+            </div>
+            <div class="why-item">
+                <div class="why-icon">🤝</div>
+                <h3>Community Support</h3>
+                <p>To support our local community, one cup at a time</p>
+            </div>
+            <div class="why-item">
+                <div class="why-icon">✨</div>
+                <h3>Special Moments</h3>
+                <p>To make everyday moments feel a little more special</p>
+            </div>
+        </div>
+        <div class="why-belief">
+            <p>We believe cafés aren't just about what's on the menu — they're about how people feel when they walk through the door.</p>
+        </div>
+    </div>
+</div>
+
+<!-- What Makes Us "Next Door" Section -->
+<div class="about-section">
+    <div class="container">
+        <div class="about-content-wrapper about-content-reverse">
+            <div class="about-image-placeholder">
+                <img src="{{ url_for('static', filename='images/cnd-neigborhoodcafe.jpg') }}" alt="Neighborhood Cafe - Cafe Next Door" class="about-section-image">
+            </div>
+            <div class="about-text-content">
+                <h2 class="about-section-title">What Makes Us "Next Door"</h2>
+                <div class="about-text">
+                    <p>We're not trying to be the biggest café in town.</p>
+                    <p>We're the café you pass every day.</p>
+                    <p>The one that remembers your usual order.</p>
+                    <p>The one that feels familiar, even on your first visit.</p>
+                    <p class="about-highlight">That's what "next door" means to us — comfort, closeness, and connection.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Behind the Counter Section -->
+<div class="about-section about-section-alt">
+    <div class="container">
+        <div class="about-content-wrapper">
+            <div class="about-text-content">
+                <h2 class="about-section-title">Behind the Counter</h2>
+                <div class="about-text">
+                    <p>Every drink is made with care. Every order matters.</p>
+                    <p>From managing ingredients responsibly to remembering our regulars, we take pride in doing the small things right — because those are the things people remember.</p>
+                </div>
+            </div>
+            <div class="about-image-placeholder">
+                <img src="{{ url_for('static', filename='images/cnd-our_team.jpg') }}" alt="Our Team - Cafe Next Door" class="about-section-image">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Gallery Section -->
+{% if gallery_images %}
+<div class="about-section">
+    <div class="container">
+        <h2 class="about-section-title" style="text-align: center; margin-bottom: 3rem;">Our Gallery</h2>
+        <p class="about-text" style="text-align: center; max-width: 600px; margin: 0 auto 3rem; color: #666;">
+            Take a look at the moments, memories, and daily life at Cafe Next Door.
+        </p>
+        <div class="gallery-grid">
+            {% for image in gallery_images %}
+            <div class="gallery-item">
+                <img src="{{ image.url }}" alt="Cafe Next Door Gallery" class="gallery-image" loading="lazy">
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Invitation / Closing Section -->
+<div class="about-invitation-section">
+    <div class="container">
+        <div class="invitation-content">
+            <h2 class="invitation-title">Come In. Sit Down. Stay a while.</h2>
+            <p class="invitation-text">Cafe Next Door is here for your quiet mornings, spontaneous conversations, and much-needed breaks.</p>
+            <p class="invitation-text">We're always happy to have you — just next door.</p>
+            <div class="invitation-buttons">
+                <a href="{{ url_for('contact') }}" class="btn btn-primary">Find Us</a>
+                <a href="{{ url_for('contact') }}" class="btn btn-secondary">Contact Us</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

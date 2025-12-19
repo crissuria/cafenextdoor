@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}Customers - Admin - Cafe Next Door{% endblock %}
+
+{% block content %}
+<div class="page-header admin-header">
+    <div class="container">
+        <h1 class="page-title">Customers</h1>
+        <p class="page-subtitle">View and manage customer accounts</p>
+    </div>
+</div>
+
+<div class="admin-section">
+    <div class="container">
+        <div class="admin-actions">
+            <a href="{{ url_for('admin_dashboard') }}" class="btn btn-secondary">← Back to Dashboard</a>
+        </div>
+
+        <!-- Search -->
+        <div class="orders-filters">
+            <form method="GET" class="filter-form">
+                <div class="search-section">
+                    <div class="search-icon-wrapper">
+                        <img src="{{ url_for('static', filename='images/cnd-search_icon.png') }}" alt="Search" class="search-icon-img">
+                    </div>
+                    <div class="filter-group search-group">
+                        <label for="search-input">Search Customers</label>
+                        <input type="text" name="search" id="search-input" value="{{ search_query or '' }}" placeholder="Search by name, email, or phone..." class="search-input">
+                    </div>
+                    <button type="submit" class="btn btn-primary search-submit-btn">
+                        <span>Search</span>
+                    </button>
+                    {% if search_query %}
+                    <a href="{{ url_for('admin_customers') }}" class="btn btn-secondary clear-filters-btn">
+                        <span>Clear</span>
+                    </a>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+
+        {% if customers %}
+        <div class="admin-menu-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Phone</th>
+                        <th>Total Orders</th>
+                        <th>Total Spent</th>
+                        <th>Member Since</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for customer in customers %}
+                    <tr>
+                        <td>{{ customer['id'] }}</td>
+                        <td><strong>{{ customer['first_name'] }} {{ customer['last_name'] }}</strong></td>
+                        <td>{{ customer['email'] }}</td>
+                        <td>{{ customer['phone'] or '-' }}</td>
+                        <td>
+                            <span class="role-badge" style="background: #3498db; color: white;">{{ customer['total_orders'] or 0 }}</span>
+                        </td>
+                        <td>
+                            <strong>P{{ "%.2f"|format(customer['total_spent'] or 0) }}</strong>
+                        </td>
+                        <td>{{ customer['created_at'][:10] if customer['created_at'] else '-' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <p>No customers found{% if search_query %} matching "{{ search_query }}"{% endif %}.</p>
+        </div>
+        {% endif %}
+
+        {% if customers %}
+        <div class="admin-stats" style="margin-top: 2rem; padding: 1.5rem; background: #f8f9fa; border-radius: 8px;">
+            <h3 style="margin-bottom: 1rem; color: #333;">Summary</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem;">
+                <div>
+                    <strong style="display: block; color: #666; font-size: 0.9rem;">Total Customers</strong>
+                    <span style="font-size: 1.5rem; font-weight: bold; color: #2c3e50;">{{ total_customers }}</span>
+                </div>
+                <div>
+                    <strong style="display: block; color: #666; font-size: 0.9rem;">Total Orders</strong>
+                    <span style="font-size: 1.5rem; font-weight: bold; color: #2c3e50;">{{ total_orders }}</span>
+                </div>
+                <div>
+                    <strong style="display: block; color: #666; font-size: 0.9rem;">Total Revenue</strong>
+                    <span style="font-size: 1.5rem; font-weight: bold; color: #27ae60;">
+                        P{{ "%.2f"|format(total_revenue) }}
+                    </span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+

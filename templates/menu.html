@@ -59,14 +59,14 @@
                     </h2>
                     <div class="menu-grid">
                         {% for item in items %}
-                            <div class="menu-item-card {% if not item['is_available'] %}sold-out{% endif %}">
+                            <div class="menu-item-card {% if item.get('is_available', 1) == 0 %}sold-out{% endif %}">
                                 <div class="menu-item-image">
                                     {% if item['image_url'] %}
                                         <img src="{{ item['image_url'] }}" alt="{{ item['name'] }}" onerror="this.parentElement.innerHTML='<div class=\'placeholder-image\'>☕</div>'">
                                     {% else %}
                                         <div class="placeholder-image">☕</div>
                                     {% endif %}
-                                    {% if not item['is_available'] %}
+                                    {% if item.get('is_available', 1) == 0 %}
                                         <div class="sold-out-overlay">Sold Out</div>
                                     {% endif %}
                                     <!-- Favorite Button -->
@@ -104,12 +104,12 @@
                                     {% endif %}
                                     <div class="menu-item-footer">
                                         <p class="menu-item-price">P{{ "%.2f"|format(item['price']) }}</p>
-                                        {% if item['is_available'] %}
+                                        {% if item.get('is_available', 1) == 1 %}
                                             <form method="POST" action="{{ url_for('add_to_cart', item_id=item['id']) }}" class="add-to-cart-form">
                                                 <button type="submit" class="btn btn-primary btn-sm add-to-cart-btn">Add to Cart</button>
                                             </form>
                                         {% else %}
-                                            <button class="btn btn-sm add-to-cart-btn" disabled>Sold Out</button>
+                                            <button class="btn btn-sm add-to-cart-btn" disabled title="This item is currently sold out">Sold Out</button>
                                         {% endif %}
                                     </div>
                                 </div>

@@ -22,6 +22,15 @@
                 <p>View and manage customer orders</p>
             </a>
             
+            <!-- All roles can view customers -->
+            <a href="{{ url_for('admin_customers') }}" class="admin-card">
+                <div class="admin-card-icon">
+                    <img src="{{ url_for('static', filename='images/cnd_admin_users_icon.png') }}" alt="View Customers">
+                </div>
+                <h3>Customers</h3>
+                <p>View customer accounts and order history</p>
+            </a>
+            
             <!-- All roles can view messages -->
             <a href="{{ url_for('admin_messages') }}" class="admin-card">
                 <div class="admin-card-icon">
