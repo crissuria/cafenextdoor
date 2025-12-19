@@ -366,6 +366,10 @@ def init_database():
     except sqlite3.OperationalError:
         pass
     try:
+        cursor.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
+    except sqlite3.OperationalError:
+        pass
+    try:
         cursor.execute('ALTER TABLE customers ADD COLUMN no_show_count INTEGER DEFAULT 0')
     except sqlite3.OperationalError:
         pass
