@@ -3852,29 +3852,53 @@ def newsletter_subscribe():
         ip_address = get_client_ip()
         conn = get_db_connection()
         
-        # Check for recent subscriptions from this IP (max 2 per minute)
-        one_minute_ago = datetime.now() - timedelta(minutes=1)
-        recent_subs = conn.execute('''
-            SELECT COUNT(*) FROM newsletter_subscribers 
-            WHERE created_at > ? AND id IN (
-                SELECT MAX(id) FROM newsletter_subscribers GROUP BY email
-            )
-        ''', (one_minute_ago.strftime('%Y-%m-%d %H:%M:%S'),)).fetchone()[0]
-        
         # Simple rate limit using session
         last_sub_time = session.get('last_newsletter_sub')
         if last_sub_time:
-            time_diff = datetime.now() - datetime.fromisoformat(last_sub_time)
-            if time_diff.total_seconds() < 10:
-                if conn:
-                    conn.close()
-                flash('Please wait a moment before subscribing again.', 'error')
-                return redirect(request.referrer or url_for('index'))
+            try:
+                # Try to parse the stored datetime
+                if isinstance(last_sub_time, str):
+                    time_diff = datetime.now() - datetime.fromisoformat(last_sub_time)
+                else:
+                    # If it's already a datetime object
+                    time_diff = datetime.now() - last_sub_time
+                if time_diff.total_seconds() < 10:
+                    if conn:
+                        conn.close()
+                    flash('Please wait a moment before subscribing again.', 'error')
+                    return redirect(request.referrer or url_for('index'))
+            except (ValueError, TypeError) as e:
+                # If parsing fails, just continue (reset the session value)
+                print(f"Error parsing last_newsletter_sub time: {str(e)}")
+                session.pop('last_newsletter_sub', None)
         
         try:
-            conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', (email, name or None))
+            # Check if name column exists, if not add it
+            try:
+                conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', (email, name or None))
+            except sqlite3.OperationalError as e:
+                # Column might not exist, try without name first, then add column
+                if 'no such column: name' in str(e).lower():
+                    print("Name column not found, adding it...")
+                    try:
+                        conn.execute('ALTER TABLE newsletter_subscribers ADD COLUMN name TEXT')
+                        conn.commit()
+                    except sqlite3.OperationalError:
+                        pass  # Column might already exist
+                    # Retry insert with name
+                    conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', (email, name or None))
+                else:
+                    raise  # Re-raise if it's a different error
+            
             conn.commit()
-            session['last_newsletter_sub'] = datetime.now().isoformat()
+            
+            # Store subscription time in session (as ISO format string)
+            try:
+                session['last_newsletter_sub'] = datetime.now().isoformat()
+                session.permanent = True
+            except Exception as session_error:
+                print(f"Error storing session: {str(session_error)}")
+                # Continue even if session storage fails
             
             # Send confirmation email
             if app.config.get('MAIL_PASSWORD') and app.config.get('MAIL_USERNAME'):
@@ -3920,6 +3944,11 @@ Cafe Next Door Team
             flash('Successfully subscribed to our newsletter!', 'success')
         except sqlite3.IntegrityError:
             flash('This email is already subscribed.', 'error')
+        except sqlite3.OperationalError as db_error:
+            import traceback
+            print(f"Database error in newsletter subscription: {str(db_error)}")
+            print(traceback.format_exc())
+            flash('An error occurred during subscription. Please try again.', 'error')
         
         if conn:
             conn.close()
