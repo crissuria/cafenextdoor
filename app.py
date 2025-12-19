@@ -3434,12 +3434,14 @@ def verify_email():
 @customer_login_required
 def send_verification_code():
     """Send verification code to customer's email."""
+    conn = None
     try:
         conn = get_db_connection()
         customer = conn.execute('SELECT * FROM customers WHERE id = ?', (session['customer_id'],)).fetchone()
 
         if not customer:
-            conn.close()
+            if conn:
+                conn.close()
             flash('Customer not found. Please log in again.', 'error')
             return redirect(url_for('customer_login'))
 
@@ -3449,13 +3451,23 @@ def send_verification_code():
 
         customer_email = customer.get('email', '')
         if not customer_email:
-            conn.close()
+            if conn:
+                conn.close()
             flash('Email address not found. Please contact support.', 'error')
             return redirect(url_for('customer_profile'))
 
         # Generate code
-        code = generate_verification_code()
-        expires_at = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            code = generate_verification_code()
+            expires_at = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception as e:
+            import traceback
+            print(f"Error generating verification code: {str(e)}")
+            print(traceback.format_exc())
+            if conn:
+                conn.close()
+            flash('Error generating verification code. Please try again.', 'error')
+            return redirect(url_for('verify_email'))
 
         # Save verification code - ensure email_verifications table exists
         try:
@@ -3465,13 +3477,37 @@ def send_verification_code():
             ''', (session['customer_id'], customer_email, code, expires_at))
             conn.commit()
         except sqlite3.OperationalError as e:
-            # Table might not exist, but it should be created in init_database
+            # Table might not exist, try to create it
             print(f"Error inserting verification code: {str(e)}")
             import traceback
             print(traceback.format_exc())
-            conn.close()
-            flash('Error saving verification code. Please try again.', 'error')
-            return redirect(url_for('verify_email'))
+            try:
+                # Try to create the table if it doesn't exist
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS email_verifications (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        customer_id INTEGER NOT NULL,
+                        email TEXT NOT NULL,
+                        verification_code TEXT NOT NULL,
+                        is_verified INTEGER DEFAULT 0,
+                        expires_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (customer_id) REFERENCES customers (id)
+                    )
+                ''')
+                conn.commit()
+                # Retry the insert
+                conn.execute('''
+                    INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
+                    VALUES (?, ?, ?, ?)
+                ''', (session['customer_id'], customer_email, code, expires_at))
+                conn.commit()
+            except Exception as create_error:
+                print(f"Error creating email_verifications table: {str(create_error)}")
+                if conn:
+                    conn.close()
+                flash('Error saving verification code. Please try again.', 'error')
+                return redirect(url_for('verify_email'))
 
         # Send verification email via Flask-Mail
         if app.config.get('MAIL_PASSWORD') and app.config.get('MAIL_USERNAME'):
@@ -3510,14 +3546,16 @@ Cafe Next Door Team
         else:
             flash('Email service is not configured. Please set MAIL_USERNAME and MAIL_PASSWORD in your environment variables.', 'error')
         
-        conn.close()
+        if conn:
+            conn.close()
         return redirect(url_for('verify_email'))
     except Exception as e:
         import traceback
         print(f"Error in send_verification_code: {str(e)}")
         print(traceback.format_exc())
         try:
-            conn.close()
+            if conn:
+                conn.close()
         except:
             pass
         flash(f'An error occurred: {str(e)}. Please try again.', 'error')
