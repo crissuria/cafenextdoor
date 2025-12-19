@@ -8,10 +8,14 @@ from app import app, init_database
 
 # Initialize database on startup
 try:
+    import traceback
     init_database()
-    print("Database initialized successfully on startup")
+    print("✓ Database initialized successfully on startup", file=sys.stderr)
 except Exception as e:
-    print(f"WARNING: Error initializing database on startup: {str(e)}", file=sys.stderr)
+    error_msg = str(e)
+    traceback_str = traceback.format_exc()
+    print(f"WARNING: Error initializing database on startup: {error_msg}", file=sys.stderr)
+    print(f"Traceback: {traceback_str}", file=sys.stderr)
     print("Database will be initialized on first use", file=sys.stderr)
     # Don't raise - let the app start and handle errors gracefully
     # The database will be initialized on first use if needed via get_db_connection()

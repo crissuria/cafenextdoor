@@ -60,11 +60,15 @@ def allowed_file(filename):
 
 def init_database():
     """Initialize the database and create tables if they don't exist."""
-    # Create database directory if it doesn't exist
-    os.makedirs(DATABASE_DIR, exist_ok=True)
-    
-    conn = sqlite3.connect(DATABASE_PATH)
-    cursor = conn.cursor()
+    try:
+        # Create database directory if it doesn't exist
+        os.makedirs(DATABASE_DIR, exist_ok=True)
+        
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
+        cursor = conn.cursor()
+    except Exception as e:
+        print(f"Error creating database directory or connection: {str(e)}")
+        raise
     
     # Create menu_items table
     cursor.execute('''
@@ -475,18 +479,38 @@ def init_database():
     ''')
     
     # Check if database is empty and seed it
-    cursor.execute('SELECT COUNT(*) FROM menu_items')
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        seed_database(cursor)
+    try:
+        cursor.execute('SELECT COUNT(*) FROM menu_items')
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            seed_database(cursor)
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Error checking/seeding menu_items: {str(e)}")
+        # Try to seed anyway
+        try:
+            seed_database(cursor)
+            conn.commit()
+        except:
+            pass
     
     # Seed ingredients if empty
-    cursor.execute('SELECT COUNT(*) FROM ingredients')
-    ingredient_count = cursor.fetchone()[0]
-    
-    if ingredient_count == 0:
-        seed_ingredients(cursor)
+    try:
+        cursor.execute('SELECT COUNT(*) FROM ingredients')
+        ingredient_count = cursor.fetchone()[0]
+        
+        if ingredient_count == 0:
+            seed_ingredients(cursor)
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Error checking/seeding ingredients: {str(e)}")
+        # Try to seed anyway
+        try:
+            seed_ingredients(cursor)
+            conn.commit()
+        except:
+            pass
     
     # Create default admin user if it doesn't exist
     cursor.execute('SELECT COUNT(*) FROM users')
@@ -867,10 +891,38 @@ def seed_ingredients(cursor):
 
 def get_db_connection():
     """Get a database connection."""
-    conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    # Enable WAL mode for better concurrency
-    conn.execute('PRAGMA journal_mode=WAL')
+    # Ensure database directory exists
+    os.makedirs(DATABASE_DIR, exist_ok=True)
+    
+    # Initialize database if it doesn't exist or tables are missing
+    try:
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
+        conn.row_factory = sqlite3.Row
+        # Check if menu_items table exists
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='menu_items'")
+        if not cursor.fetchone():
+            # Database exists but tables don't - initialize
+            conn.close()
+            init_database()
+            conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+        # Enable WAL mode for better concurrency
+        try:
+            conn.execute('PRAGMA journal_mode=WAL')
+        except:
+            pass  # WAL might not be supported in some environments
+    except Exception as e:
+        # If connection fails, try to initialize database
+        print(f"Database connection error: {str(e)}")
+        try:
+            init_database()
+            conn = sqlite3.connect(DATABASE_PATH, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+        except Exception as init_error:
+            print(f"Database initialization error: {str(init_error)}")
+            raise
+    
     return conn
 
 def send_order_notification(customer_id, order_id, status, conn=None):
@@ -1025,7 +1077,14 @@ def about():
 @app.route('/menu')
 def menu():
     """Menu page route - displays all menu items with search and filter."""
+    conn = None
     try:
+        # Ensure database is initialized
+        try:
+            init_database()
+        except Exception as init_error:
+            print(f"Warning: Database initialization check failed: {str(init_error)}")
+        
         search_query = request.args.get('search', '').strip()
         category_filter = request.args.get('category', '')
         price_sort = request.args.get('price', '')  # 'low' or 'high'
@@ -1065,18 +1124,21 @@ def menu():
         items = [dict(row) for row in rows]
         
         # Get all categories for filter dropdown
-        all_categories = conn.execute('SELECT DISTINCT category FROM menu_items ORDER BY category').fetchall()
-        all_categories = [row['category'] for row in all_categories]
+        try:
+            all_categories_rows = conn.execute('SELECT DISTINCT category FROM menu_items ORDER BY category').fetchall()
+            all_categories = [row['category'] for row in all_categories_rows]
+        except:
+            all_categories = []
         
         # Get customer favorites if logged in
         favorites = []
         if 'customer_id' in session:
-            fav_rows = conn.execute('SELECT menu_item_id FROM favorites WHERE customer_id = ?', 
-                                    (session['customer_id'],)).fetchall()
-            favorites = [row['menu_item_id'] for row in fav_rows]
-        
-        # Convert Row objects to dictionaries
-        items = [dict(row) for row in rows]
+            try:
+                fav_rows = conn.execute('SELECT menu_item_id FROM favorites WHERE customer_id = ?', 
+                                        (session['customer_id'],)).fetchall()
+                favorites = [row['menu_item_id'] for row in fav_rows]
+            except:
+                favorites = []
         
         # Get ratings for each item
         for item in items:
@@ -1085,18 +1147,19 @@ def menu():
                     SELECT AVG(rating) as avg_rating, COUNT(*) as review_count
                     FROM reviews WHERE menu_item_id = ? AND is_approved = 1
                 ''', (item['id'],)).fetchone()
-                item['avg_rating'] = rating_data['avg_rating'] or 0
-                item['review_count'] = rating_data['review_count'] or 0
+                item['avg_rating'] = rating_data['avg_rating'] or 0 if rating_data else 0
+                item['review_count'] = rating_data['review_count'] or 0 if rating_data else 0
             except:
                 item['avg_rating'] = 0
                 item['review_count'] = 0
         
-        conn.close()
+        if conn:
+            conn.close()
         
         # Group items by category (show all items that are marked as available)
         categories = {}
         for item in items:
-            category = item['category']
+            category = item.get('category', 'Uncategorized')
             if category not in categories:
                 categories[category] = []
             categories[category].append(item)
@@ -1108,10 +1171,15 @@ def menu():
         print(f"Error in menu route: {str(e)}")
         import traceback
         traceback.print_exc()
-        conn.close()
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
         flash('Error loading menu. Please try again.', 'error')
         return render_template('menu.html', categories={}, all_categories=[],
-                              search_query='', category_filter='', price_sort='', favorites=[])
+                              search_query=search_query or '', category_filter=category_filter or '', 
+                              price_sort=price_sort or '', favorites=[])
 
 def get_client_ip():
     """Get the client's IP address."""
@@ -4379,37 +4447,72 @@ def admin_delete_user(user_id):
 def debug_db_check():
     """Debug route to check database state (remove in production)."""
     try:
-        init_database()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check if users table exists
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
-        users_table = cursor.fetchone()
-        
-        # Get all users
-        users = []
-        if users_table:
-            cursor.execute('SELECT id, username, role, full_name FROM users')
-            users = cursor.fetchall()
-        
-        # Check admin user specifically
-        admin_user = None
-        if users_table:
-            cursor.execute("SELECT * FROM users WHERE username = 'admin'")
-            admin_user = cursor.fetchone()
-        
-        conn.close()
-        
+        import os
         result = {
-            'users_table_exists': users_table is not None,
-            'users_count': len(users),
-            'users': [dict(u) for u in users] if users else [],
-            'admin_user_exists': admin_user is not None,
-            'admin_user': dict(admin_user) if admin_user else None
+            'database_path': DATABASE_PATH,
+            'database_dir': DATABASE_DIR,
+            'database_dir_exists': os.path.exists(DATABASE_DIR),
+            'database_file_exists': os.path.exists(DATABASE_PATH),
+            'current_working_dir': os.getcwd(),
         }
         
-        return f"<pre>{result}</pre>", 200
+        try:
+            init_database()
+            result['init_success'] = True
+        except Exception as init_error:
+            result['init_success'] = False
+            result['init_error'] = str(init_error)
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            
+            # Check all tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = [row[0] for row in cursor.fetchall()]
+            result['tables'] = tables
+            
+            # Check if menu_items table exists
+            menu_items_exists = 'menu_items' in tables
+            result['menu_items_table_exists'] = menu_items_exists
+            
+            if menu_items_exists:
+                cursor.execute('SELECT COUNT(*) FROM menu_items')
+                menu_count = cursor.fetchone()[0]
+                result['menu_items_count'] = menu_count
+                
+                # Try to fetch a few items
+                try:
+                    cursor.execute('SELECT id, name, price, category FROM menu_items LIMIT 5')
+                    sample_items = cursor.fetchall()
+                    result['sample_items'] = [dict(item) for item in sample_items]
+                except Exception as e:
+                    result['sample_items_error'] = str(e)
+            
+            # Check if users table exists
+            users_table_exists = 'users' in tables
+            result['users_table_exists'] = users_table_exists
+            
+            if users_table_exists:
+                cursor.execute('SELECT COUNT(*) FROM users')
+                user_count = cursor.fetchone()[0]
+                result['users_count'] = user_count
+                
+                # Check admin user specifically
+                cursor.execute("SELECT * FROM users WHERE username = 'admin'")
+                admin_user = cursor.fetchone()
+                result['admin_user_exists'] = admin_user is not None
+                if admin_user:
+                    result['admin_user'] = dict(admin_user)
+            
+            conn.close()
+        except Exception as conn_error:
+            result['connection_error'] = str(conn_error)
+            import traceback
+            result['connection_traceback'] = traceback.format_exc()
+        
+        import json
+        return f"<h1>Database Check</h1><pre>{json.dumps(result, indent=2)}</pre>", 200
     except Exception as e:
         import traceback
         return f"<h1>Error</h1><pre>{str(e)}\n{traceback.format_exc()}</pre>", 500
