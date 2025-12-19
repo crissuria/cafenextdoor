@@ -2201,10 +2201,10 @@ def customer_register():
                 if 'no such column: email_verified' in str(e).lower():
                     print(f"Adding email_verified column: {str(e)}")
                     conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
-                    # Now insert without email_verified (will use default 0)
+                    # Now insert with email_verified (column now exists)
                     conn.execute('''
-                        INSERT INTO customers (email, password_hash, first_name, last_name, phone)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO customers (email, password_hash, first_name, last_name, phone, email_verified)
+                        VALUES (?, ?, ?, ?, ?, 0)
                     ''', (email, password_hash, first_name, last_name, phone))
                 else:
                     raise  # Re-raise if it's a different error
