@@ -1335,6 +1335,135 @@ def generate_verification_code():
     import random
     return str(random.randint(100000, 999999))
 
+# Email Verification Helper Functions
+def send_verification_email(customer_email, customer_name, verification_code):
+    """Send email verification code to customer."""
+    if not app.config.get('MAIL_PASSWORD') or not app.config.get('MAIL_USERNAME'):
+        return False, 'Email service is not configured.'
+    
+    try:
+        sender = app.config.get('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME', 'noreply@cafenextdoor.com'))
+        subject = 'Email Verification Code - Cafe Next Door'
+        body = f'''Hello {customer_name or 'Customer'},
+
+Thank you for registering with Cafe Next Door!
+
+Your email verification code is: {verification_code}
+
+This code will expire in 15 minutes.
+
+If you didn't request this code, please ignore this email.
+
+Best regards,
+Cafe Next Door Team'''
+        
+        msg = Message(
+            subject=subject,
+            recipients=[customer_email],
+            body=body,
+            sender=sender
+        )
+        mail.send(msg)
+        print(f"Verification email sent successfully to {customer_email}")
+        return True, None
+    except Exception as e:
+        import traceback
+        error_msg = f'Error sending verification email: {str(e)}'
+        print(error_msg)
+        print(traceback.format_exc())
+        return False, error_msg
+
+def create_verification_code(customer_id, customer_email, conn):
+    """Create and save a verification code for a customer."""
+    try:
+        # Generate code
+        code = generate_verification_code()
+        expires_at = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Ensure email_verifications table exists
+        try:
+            conn.execute('''
+                INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
+                VALUES (?, ?, ?, ?)
+            ''', (customer_id, customer_email, code, expires_at))
+            conn.commit()
+            return code, None
+        except sqlite3.OperationalError as e:
+            # Table might not exist, create it
+            if 'no such table' in str(e).lower():
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS email_verifications (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        customer_id INTEGER NOT NULL,
+                        email TEXT NOT NULL,
+                        verification_code TEXT NOT NULL,
+                        is_verified INTEGER DEFAULT 0,
+                        expires_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (customer_id) REFERENCES customers (id)
+                    )
+                ''')
+                conn.commit()
+                # Retry insert
+                conn.execute('''
+                    INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
+                    VALUES (?, ?, ?, ?)
+                ''', (customer_id, customer_email, code, expires_at))
+                conn.commit()
+                return code, None
+            raise
+    except Exception as e:
+        import traceback
+        error_msg = f'Error creating verification code: {str(e)}'
+        print(error_msg)
+        print(traceback.format_exc())
+        return None, error_msg
+
+def verify_email_code(customer_id, code, conn):
+    """Verify an email verification code."""
+    try:
+        # Get the latest unverified code
+        verification = conn.execute('''
+            SELECT * FROM email_verifications 
+            WHERE customer_id = ? AND verification_code = ? AND is_verified = 0
+            ORDER BY created_at DESC LIMIT 1
+        ''', (customer_id, code)).fetchone()
+        
+        if not verification:
+            return False, 'Invalid verification code.'
+        
+        # Convert Row to dict
+        verification = dict(verification) if not isinstance(verification, dict) else verification
+        
+        # Check expiration
+        if verification.get('expires_at'):
+            try:
+                expires_at = datetime.strptime(verification['expires_at'], '%Y-%m-%d %H:%M:%S')
+                if datetime.now() > expires_at:
+                    return False, 'Verification code has expired. Please request a new one.'
+            except (ValueError, TypeError):
+                pass  # If we can't parse, assume valid
+        
+        # Mark as verified
+        conn.execute('UPDATE email_verifications SET is_verified = 1 WHERE id = ?', (verification['id'],))
+        
+        # Update customer email_verified status
+        try:
+            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (customer_id,))
+        except sqlite3.OperationalError:
+            # Column doesn't exist, add it
+            conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
+            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (customer_id,))
+        
+        conn.commit()
+        return True, None
+    except Exception as e:
+        import traceback
+        error_msg = f'Error verifying code: {str(e)}'
+        print(error_msg)
+        print(traceback.format_exc())
+        return False, error_msg
+
 def check_blacklist(customer_id=None, email=None, phone=None):
     """Check if customer is blacklisted."""
     conn = get_db_connection()
@@ -3352,129 +3481,81 @@ def loyalty_program():
 @app.route('/verify-email', methods=['GET', 'POST'], endpoint='verify_email')
 @customer_login_required
 def verify_email():
-    """Email verification page."""
+    """Email verification page - clean and simplified."""
+    conn = None
     try:
         conn = get_db_connection()
         customer = conn.execute('SELECT * FROM customers WHERE id = ?', (session['customer_id'],)).fetchone()
         
         if not customer:
-            conn.close()
+            if conn:
+                conn.close()
             flash('Customer not found. Please log in again.', 'error')
             return redirect(url_for('customer_login'))
         
-        # Convert Row to dict if needed
-        if not isinstance(customer, dict):
-            customer = dict(customer)
-        
+        # Convert Row to dict
+        customer = dict(customer) if not isinstance(customer, dict) else customer
         customer_email = customer.get('email', '')
+        
         if not customer_email:
-            conn.close()
+            if conn:
+                conn.close()
             flash('Email address not found. Please contact support.', 'error')
             return redirect(url_for('customer_profile'))
         
-        # Check if email_verified column exists
-        try:
-            # Try to access email_verified column
-            email_verified = customer.get('email_verified', 0)
-            # If column doesn't exist, the get will return None, so convert to 0
-            if email_verified is None:
-                email_verified = 0
-        except (KeyError, AttributeError, TypeError):
-            # Column doesn't exist in database yet
-            email_verified = 0
-        
+        # Check if already verified
+        email_verified = customer.get('email_verified', 0) or 0
         if email_verified == 1:
-            conn.close()
+            if conn:
+                conn.close()
             flash('Your email is already verified.', 'success')
             return redirect(url_for('customer_profile'))
         
+        # Handle POST - verify code
         if request.method == 'POST':
-            try:
-                code = request.form.get('verification_code', '').strip()
-                
-                if not code:
-                    flash('Please enter the verification code.', 'error')
+            code = request.form.get('verification_code', '').strip()
+            
+            if not code:
+                if conn:
                     conn.close()
-                    return render_template('verify_email.html', customer=customer)
-                
-                # Check verification code
-                verification = conn.execute('''
-                    SELECT * FROM email_verifications 
-                    WHERE customer_id = ? AND verification_code = ? AND is_verified = 0
-                    ORDER BY created_at DESC LIMIT 1
-                ''', (session['customer_id'], code)).fetchone()
-                
-                if verification:
-                    # Convert Row to dict if needed
-                    if not isinstance(verification, dict):
-                        verification = dict(verification)
-                    
-                    # Check if code is expired (15 minutes)
-                    try:
-                        if verification.get('expires_at'):
-                            expires_at = datetime.strptime(verification['expires_at'], '%Y-%m-%d %H:%M:%S')
-                            if datetime.now() > expires_at:
-                                conn.close()
-                                flash('Verification code has expired. Please request a new one.', 'error')
-                                return render_template('verify_email.html', customer=customer)
-                    except (ValueError, TypeError) as e:
-                        print(f"Error parsing expiration date: {str(e)}")
-                        # If we can't parse the date, assume it's valid and proceed
-                    
-                    # Mark as verified
-                    try:
-                        conn.execute('UPDATE email_verifications SET is_verified = 1 WHERE id = ?', (verification['id'],))
-                        
-                        # Check if email_verified column exists, if not add it
-                        try:
-                            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
-                        except sqlite3.OperationalError as e:
-                            # Column doesn't exist, add it
-                            print(f"Adding email_verified column: {str(e)}")
-                            conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
-                            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
-                        
-                        conn.commit()
-                        conn.close()
-                        
-                        flash('Email address verified successfully!', 'success')
-                        return redirect(url_for('customer_profile'))
-                    except Exception as e:
-                        import traceback
-                        print(f"Error updating verification status: {str(e)}")
-                        print(traceback.format_exc())
-                        conn.close()
-                        flash(f'Error verifying email: {str(e)}. Please try again or contact support.', 'error')
-                        return render_template('verify_email.html', customer=customer)
-                else:
+                flash('Please enter the verification code.', 'error')
+                return render_template('verify_email.html', customer=customer)
+            
+            # Verify the code
+            success, error_msg = verify_email_code(session['customer_id'], code, conn)
+            
+            if success:
+                if conn:
                     conn.close()
-                    flash('Invalid verification code. Please try again.', 'error')
-                    return render_template('verify_email.html', customer=customer)
-            except Exception as e:
-                import traceback
-                print(f"Error in verify_email POST: {str(e)}")
-                print(traceback.format_exc())
-                conn.close()
-                flash(f'An error occurred: {str(e)}. Please try again.', 'error')
+                flash('Email address verified successfully!', 'success')
+                return redirect(url_for('customer_profile'))
+            else:
+                if conn:
+                    conn.close()
+                flash(error_msg or 'Invalid verification code. Please try again.', 'error')
                 return render_template('verify_email.html', customer=customer)
         
-        conn.close()
+        # GET request - show verification page
+        if conn:
+            conn.close()
         return render_template('verify_email.html', customer=customer)
+        
     except Exception as e:
         import traceback
         print(f"Error in verify_email: {str(e)}")
         print(traceback.format_exc())
         try:
-            conn.close()
+            if conn:
+                conn.close()
         except:
             pass
-        flash(f'An error occurred: {str(e)}. Please try again.', 'error')
+        flash('An error occurred. Please try again.', 'error')
         return redirect(url_for('customer_profile'))
 
 @app.route('/send-verification-code', methods=['POST'])
 @customer_login_required
 def send_verification_code():
-    """Send verification code to customer's email."""
+    """Send verification code to customer's email - clean and simplified."""
     conn = None
     try:
         conn = get_db_connection()
@@ -3486,110 +3567,37 @@ def send_verification_code():
             flash('Customer not found. Please log in again.', 'error')
             return redirect(url_for('customer_login'))
 
-        # Convert Row to dict if needed
-        if not isinstance(customer, dict):
-            customer = dict(customer)
-
+        # Convert Row to dict
+        customer = dict(customer) if not isinstance(customer, dict) else customer
         customer_email = customer.get('email', '')
+        customer_name = customer.get('first_name', 'Customer')
+
         if not customer_email:
             if conn:
                 conn.close()
             flash('Email address not found. Please contact support.', 'error')
             return redirect(url_for('customer_profile'))
 
-        # Generate code
-        try:
-            code = generate_verification_code()
-            expires_at = (datetime.now() + timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S')
-        except Exception as e:
-            import traceback
-            print(f"Error generating verification code: {str(e)}")
-            print(traceback.format_exc())
+        # Create verification code
+        code, error_msg = create_verification_code(session['customer_id'], customer_email, conn)
+        if not code:
             if conn:
                 conn.close()
-            flash('Error generating verification code. Please try again.', 'error')
+            flash(error_msg or 'Error generating verification code. Please try again.', 'error')
             return redirect(url_for('verify_email'))
 
-        # Save verification code - ensure email_verifications table exists
-        try:
-            conn.execute('''
-                INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
-                VALUES (?, ?, ?, ?)
-            ''', (session['customer_id'], customer_email, code, expires_at))
-            conn.commit()
-        except sqlite3.OperationalError as e:
-            # Table might not exist, try to create it
-            print(f"Error inserting verification code: {str(e)}")
-            import traceback
-            print(traceback.format_exc())
-            try:
-                # Try to create the table if it doesn't exist
-                conn.execute('''
-                    CREATE TABLE IF NOT EXISTS email_verifications (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        customer_id INTEGER NOT NULL,
-                        email TEXT NOT NULL,
-                        verification_code TEXT NOT NULL,
-                        is_verified INTEGER DEFAULT 0,
-                        expires_at TIMESTAMP,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (customer_id) REFERENCES customers (id)
-                    )
-                ''')
-                conn.commit()
-                # Retry the insert
-                conn.execute('''
-                    INSERT INTO email_verifications (customer_id, email, verification_code, expires_at)
-                    VALUES (?, ?, ?, ?)
-                ''', (session['customer_id'], customer_email, code, expires_at))
-                conn.commit()
-            except Exception as create_error:
-                print(f"Error creating email_verifications table: {str(create_error)}")
-                if conn:
-                    conn.close()
-                flash('Error saving verification code. Please try again.', 'error')
-                return redirect(url_for('verify_email'))
-
-        # Send verification email via Flask-Mail
-        if app.config.get('MAIL_PASSWORD') and app.config.get('MAIL_USERNAME'):
-            try:
-                subject = 'Email Verification Code - Cafe Next Door'
-                first_name = customer.get('first_name', 'Customer')
-                body = f'''
-Hello {first_name},
-
-Thank you for registering with Cafe Next Door!
-
-Your email verification code is: {code}
-
-This code will expire in 15 minutes.
-
-If you didn't request this code, please ignore this email.
-
-Best regards,
-Cafe Next Door Team
-'''
-                sender = app.config.get('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME', 'noreply@cafenextdoor.com'))
-                msg = Message(
-                    subject=subject,
-                    recipients=[customer_email],
-                    body=body,
-                    sender=sender
-                )
-                mail.send(msg)
-                print(f"Verification email sent successfully to {customer_email}")
-                flash('Verification code has been sent to your email address!', 'success')
-            except Exception as e:
-                import traceback
-                print(f"Error sending verification email: {str(e)}")
-                print(traceback.format_exc())
-                flash(f'Error sending verification email: {str(e)}. Please try again later or contact support.', 'error')
-        else:
-            flash('Email service is not configured. Please set MAIL_USERNAME and MAIL_PASSWORD in your environment variables.', 'error')
+        # Send verification email
+        email_sent, email_error = send_verification_email(customer_email, customer_name, code)
         
+        if email_sent:
+            flash('Verification code has been sent to your email address!', 'success')
+        else:
+            flash(f'Code generated but email could not be sent: {email_error}. Please contact support.', 'warning')
+
         if conn:
             conn.close()
         return redirect(url_for('verify_email'))
+        
     except Exception as e:
         import traceback
         print(f"Error in send_verification_code: {str(e)}")
@@ -3599,7 +3607,7 @@ Cafe Next Door Team
                 conn.close()
         except:
             pass
-        flash(f'An error occurred: {str(e)}. Please try again.', 'error')
+        flash('An error occurred. Please try again.', 'error')
         return redirect(url_for('verify_email'))
 
 @app.route('/forgot-password', methods=['GET', 'POST'])
@@ -3820,95 +3828,51 @@ def view_favorites():
     items = [dict(row) for row in rows]
     return render_template('favorites.html', items=items)
 
-# Newsletter Routes
-@app.route('/newsletter/subscribe', methods=['POST'])
-def newsletter_subscribe():
-    """Subscribe to newsletter."""
-    conn = None
+# Newsletter Helper Functions
+def validate_newsletter_email(email):
+    """Validate newsletter email address."""
+    if not email or '@' not in email or '.' not in email.split('@')[-1]:
+        return False, 'Please enter a valid email address.'
+    
+    # Block disposable email domains
+    disposable_domains = ['tempmail.com', 'throwaway.com', 'mailinator.com', 'guerrillamail.com', 
+                          'fakeinbox.com', '10minutemail.com', 'trashmail.com']
+    email_domain = email.split('@')[-1].lower()
+    if email_domain in disposable_domains:
+        return False, 'Please use a valid email address.'
+    
+    return True, None
+
+def check_newsletter_rate_limit():
+    """Check if user is rate limited for newsletter subscription."""
+    last_sub_time = session.get('last_newsletter_sub')
+    if not last_sub_time:
+        return True, None
+    
     try:
-        email = request.form.get('email', '').strip().lower()
-        name = request.form.get('name', '').strip()
-        honeypot = request.form.get('website_url', '')  # Honeypot field
+        if isinstance(last_sub_time, str):
+            time_diff = datetime.now() - datetime.fromisoformat(last_sub_time)
+        else:
+            time_diff = datetime.now() - last_sub_time
         
-        # Honeypot check
-        if honeypot:
-            flash('Subscription failed.', 'error')
-            return redirect(request.referrer or url_for('index'))
+        if time_diff.total_seconds() < 10:
+            return False, 'Please wait a moment before subscribing again.'
+    except (ValueError, TypeError):
+        session.pop('last_newsletter_sub', None)
+    
+    return True, None
+
+def send_newsletter_confirmation_email(email, name):
+    """Send newsletter subscription confirmation email."""
+    if not app.config.get('MAIL_PASSWORD') or not app.config.get('MAIL_USERNAME'):
+        return False, 'Email service is not configured.'
+    
+    try:
+        sender = app.config.get('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME', 'noreply@cafenextdoor.com'))
+        cafe_email = app.config.get('CAFE_EMAIL', 'cafenextdoor@protonmail.com')
         
-        # Validate email
-        if not email or '@' not in email or '.' not in email.split('@')[-1]:
-            flash('Please enter a valid email address.', 'error')
-            return redirect(request.referrer or url_for('index'))
-        
-        # Block common disposable email domains
-        disposable_domains = ['tempmail.com', 'throwaway.com', 'mailinator.com', 'guerrillamail.com', 
-                              'fakeinbox.com', '10minutemail.com', 'trashmail.com']
-        email_domain = email.split('@')[-1]
-        if email_domain in disposable_domains:
-            flash('Please use a valid email address.', 'error')
-            return redirect(request.referrer or url_for('index'))
-        
-        # Rate limiting - check IP
-        ip_address = get_client_ip()
-        conn = get_db_connection()
-        
-        # Simple rate limit using session
-        last_sub_time = session.get('last_newsletter_sub')
-        if last_sub_time:
-            try:
-                # Try to parse the stored datetime
-                if isinstance(last_sub_time, str):
-                    time_diff = datetime.now() - datetime.fromisoformat(last_sub_time)
-                else:
-                    # If it's already a datetime object
-                    time_diff = datetime.now() - last_sub_time
-                if time_diff.total_seconds() < 10:
-                    if conn:
-                        conn.close()
-                    flash('Please wait a moment before subscribing again.', 'error')
-                    return redirect(request.referrer or url_for('index'))
-            except (ValueError, TypeError) as e:
-                # If parsing fails, just continue (reset the session value)
-                print(f"Error parsing last_newsletter_sub time: {str(e)}")
-                session.pop('last_newsletter_sub', None)
-        
-        try:
-            # Check if name column exists, if not add it
-            try:
-                conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', (email, name or None))
-            except sqlite3.OperationalError as e:
-                # Column might not exist, try without name first, then add column
-                if 'no such column: name' in str(e).lower():
-                    print("Name column not found, adding it...")
-                    try:
-                        conn.execute('ALTER TABLE newsletter_subscribers ADD COLUMN name TEXT')
-                        conn.commit()
-                    except sqlite3.OperationalError:
-                        pass  # Column might already exist
-                    # Retry insert with name
-                    conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', (email, name or None))
-                else:
-                    raise  # Re-raise if it's a different error
-            
-            conn.commit()
-            
-            # Store subscription time in session (as ISO format string)
-            try:
-                session['last_newsletter_sub'] = datetime.now().isoformat()
-                session.permanent = True
-            except Exception as session_error:
-                print(f"Error storing session: {str(session_error)}")
-                # Continue even if session storage fails
-            
-            # Send confirmation email
-            if app.config.get('MAIL_PASSWORD') and app.config.get('MAIL_USERNAME'):
-                try:
-                    sender = app.config.get('MAIL_DEFAULT_SENDER', app.config.get('MAIL_USERNAME', 'noreply@cafenextdoor.com'))
-                    cafe_email = app.config.get('CAFE_EMAIL', 'cafenextdoor@protonmail.com')
-                    
-                    subject = 'Welcome to Cafe Next Door Newsletter!'
-                    body = f'''
-Hello {name or 'there'},
+        subject = 'Welcome to Cafe Next Door Newsletter!'
+        body = f'''Hello {name or 'there'},
 
 Thank you for subscribing to the Cafe Next Door newsletter!
 
@@ -3925,26 +3889,92 @@ If you didn't subscribe to our newsletter, please ignore this email.
 To unsubscribe, please contact us at {cafe_email}.
 
 Best regards,
-Cafe Next Door Team
-'''
-                    msg = Message(
-                        subject=subject,
-                        recipients=[email],
-                        body=body,
-                        sender=sender
-                    )
-                    mail.send(msg)
-                    print(f"Newsletter confirmation email sent to {email}")
-                except Exception as e:
-                    import traceback
-                    print(f"Error sending newsletter confirmation email: {str(e)}")
-                    print(traceback.format_exc())
-                    # Don't fail the subscription if email fails
+Cafe Next Door Team'''
+        
+        msg = Message(
+            subject=subject,
+            recipients=[email],
+            body=body,
+            sender=sender
+        )
+        mail.send(msg)
+        print(f"Newsletter confirmation email sent to {email}")
+        return True, None
+    except Exception as e:
+        import traceback
+        error_msg = f'Error sending confirmation email: {str(e)}'
+        print(error_msg)
+        print(traceback.format_exc())
+        return False, error_msg
+
+# Newsletter Routes
+@app.route('/newsletter/subscribe', methods=['POST'])
+def newsletter_subscribe():
+    """Subscribe to newsletter - clean and simplified."""
+    conn = None
+    try:
+        # Get form data
+        email = request.form.get('email', '').strip().lower()
+        name = request.form.get('name', '').strip()
+        honeypot = request.form.get('website_url', '')
+        
+        # Honeypot check
+        if honeypot:
+            flash('Subscription failed.', 'error')
+            return redirect(request.referrer or url_for('index'))
+        
+        # Validate email
+        is_valid, error_msg = validate_newsletter_email(email)
+        if not is_valid:
+            flash(error_msg, 'error')
+            return redirect(request.referrer or url_for('index'))
+        
+        # Check rate limit
+        can_subscribe, rate_limit_msg = check_newsletter_rate_limit()
+        if not can_subscribe:
+            flash(rate_limit_msg, 'error')
+            return redirect(request.referrer or url_for('index'))
+        
+        # Connect to database
+        conn = get_db_connection()
+        
+        # Insert subscriber
+        try:
+            # Ensure name column exists
+            try:
+                conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', 
+                           (email, name or None))
+            except sqlite3.OperationalError as e:
+                if 'no such column: name' in str(e).lower():
+                    try:
+                        conn.execute('ALTER TABLE newsletter_subscribers ADD COLUMN name TEXT')
+                        conn.commit()
+                    except sqlite3.OperationalError:
+                        pass  # Column might already exist
+                    conn.execute('INSERT INTO newsletter_subscribers (email, name) VALUES (?, ?)', 
+                               (email, name or None))
+                else:
+                    raise
+            
+            conn.commit()
+            
+            # Update rate limit
+            try:
+                session['last_newsletter_sub'] = datetime.now().isoformat()
+                session.permanent = True
+            except Exception:
+                pass  # Continue even if session fails
+            
+            # Send confirmation email (non-blocking)
+            email_sent, email_error = send_newsletter_confirmation_email(email, name)
+            if not email_sent:
+                print(f"Newsletter subscription succeeded but email failed: {email_error}")
             
             flash('Successfully subscribed to our newsletter!', 'success')
+            
         except sqlite3.IntegrityError:
-            flash('This email is already subscribed.', 'error')
-        except sqlite3.OperationalError as db_error:
+            flash('This email is already subscribed.', 'info')
+        except Exception as db_error:
             import traceback
             print(f"Database error in newsletter subscription: {str(db_error)}")
             print(traceback.format_exc())
@@ -3953,6 +3983,7 @@ Cafe Next Door Team
         if conn:
             conn.close()
         return redirect(request.referrer or url_for('index'))
+        
     except Exception as e:
         import traceback
         print(f"Error in newsletter_subscribe: {str(e)}")

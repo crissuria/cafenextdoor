@@ -13,36 +13,85 @@
 <div class="auth-page">
     <div class="auth-container">
         <div class="auth-header">
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <div style="width: 80px; height: 80px; margin: 0 auto 1rem; background: #f0f0f0; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2.5rem;">
+                    ✉️
+                </div>
+            </div>
             <h1>Email Verification</h1>
-            <p>We'll send a verification code to <strong>{{ customer.email or 'your email address' }}</strong></p>
+            <p>We've sent a verification code to:</p>
+            <p style="font-weight: bold; color: #8B4513; font-size: 1.1rem; margin: 0.5rem 0;">{{ customer.email or 'your email address' }}</p>
+            <p style="color: #666; font-size: 0.9rem; margin-top: 0.5rem;">Please check your inbox and enter the 6-digit code below.</p>
         </div>
         
         {% if not customer.email %}
-        <div class="alert alert-warning">
-            <p>Email address not found. Please contact support.</p>
+        <div class="alert alert-warning" style="padding: 1.5rem; border-radius: 8px; background: #fff3cd; border: 1px solid #ffc107; margin: 1rem 0;">
+            <p style="margin: 0 0 1rem 0;">Email address not found. Please contact support.</p>
             <a href="{{ url_for('customer_profile') }}" class="btn btn-primary">Go to Profile</a>
         </div>
         {% else %}
-        <form method="POST" class="auth-form">
+        <form method="POST" class="auth-form" id="verify-form">
             <div class="form-group">
                 <label for="verification_code">Verification Code</label>
-                <input type="text" id="verification_code" name="verification_code" required 
-                       placeholder="Enter 6-digit code" maxlength="6" pattern="[0-9]{6}">
-                <small>Enter the 6-digit code sent to your email address</small>
+                <input type="text" 
+                       id="verification_code" 
+                       name="verification_code" 
+                       required 
+                       placeholder="000000" 
+                       maxlength="6" 
+                       pattern="[0-9]{6}"
+                       style="text-align: center; font-size: 1.5rem; letter-spacing: 0.5rem; font-weight: bold;"
+                       autocomplete="off">
+                <small style="display: block; text-align: center; margin-top: 0.5rem; color: #666;">
+                    Enter the 6-digit code sent to your email address
+                </small>
             </div>
             
-            <button type="submit" class="btn btn-primary btn-full">Verify</button>
+            <button type="submit" class="btn btn-primary btn-full" style="margin-top: 1.5rem;">
+                Verify Email Address
+            </button>
         </form>
         
-        <div class="auth-footer">
-            <form method="POST" action="{{ url_for('send_verification_code') }}" id="resend-form" style="margin-top: 1rem;">
-                <button type="submit" class="btn btn-secondary btn-full">Send Verification Code</button>
+        <div class="auth-footer" style="margin-top: 2rem; padding-top: 2rem; border-top: 1px solid #e0e0e0;">
+            <form method="POST" action="{{ url_for('send_verification_code') }}" id="resend-form">
+                <button type="submit" class="btn btn-secondary btn-full" style="background: #6c757d; border: none;">
+                    🔄 Resend Verification Code
+                </button>
             </form>
-            <p style="text-align: center; margin-top: 1rem; color: #666; font-size: 0.9rem;">
-                Didn't receive the code? Check your spam folder or click "Send Verification Code" again.
-            </p>
+            <div style="text-align: center; margin-top: 1.5rem; padding: 1rem; background: #f9f9f9; border-radius: 8px;">
+                <p style="margin: 0; color: #666; font-size: 0.9rem;">
+                    <strong>Didn't receive the code?</strong><br>
+                    • Check your spam/junk folder<br>
+                    • Make sure you entered the correct email address<br>
+                    • Click "Resend Verification Code" to get a new code<br>
+                    • Codes expire after 15 minutes
+                </p>
+            </div>
         </div>
         {% endif %}
     </div>
 </div>
+
+<script>
+// Auto-focus on code input
+document.addEventListener('DOMContentLoaded', function() {
+    const codeInput = document.getElementById('verification_code');
+    if (codeInput) {
+        codeInput.focus();
+        
+        // Auto-format: only allow numbers
+        codeInput.addEventListener('input', function(e) {
+            e.target.value = e.target.value.replace(/[^0-9]/g, '');
+        });
+        
+        // Auto-submit when 6 digits are entered
+        codeInput.addEventListener('input', function(e) {
+            if (e.target.value.length === 6) {
+                // Optional: auto-submit after a brief delay
+                // setTimeout(() => document.getElementById('verify-form').submit(), 500);
+            }
+        });
+    }
+});
+</script>
 {% endblock %}
