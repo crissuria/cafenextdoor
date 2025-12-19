@@ -3346,79 +3346,89 @@ def verify_email():
             conn.close()
             flash('Your email is already verified.', 'success')
             return redirect(url_for('customer_profile'))
-    
-    if request.method == 'POST':
-        try:
-            code = request.form.get('verification_code', '').strip()
-            
-            if not code:
-                flash('Please enter the verification code.', 'error')
-                conn.close()
-                return render_template('verify_email.html', customer=customer)
-            
-            # Check verification code
-            verification = conn.execute('''
-                SELECT * FROM email_verifications 
-                WHERE customer_id = ? AND verification_code = ? AND is_verified = 0
-                ORDER BY created_at DESC LIMIT 1
-            ''', (session['customer_id'], code)).fetchone()
-            
-            if verification:
-                # Convert Row to dict if needed
-                if not isinstance(verification, dict):
-                    verification = dict(verification)
+        
+        if request.method == 'POST':
+            try:
+                code = request.form.get('verification_code', '').strip()
                 
-                # Check if code is expired (15 minutes)
-                try:
-                    if verification.get('expires_at'):
-                        expires_at = datetime.strptime(verification['expires_at'], '%Y-%m-%d %H:%M:%S')
-                        if datetime.now() > expires_at:
-                            conn.close()
-                            flash('Verification code has expired. Please request a new one.', 'error')
-                            return render_template('verify_email.html', customer=customer)
-                except (ValueError, TypeError) as e:
-                    print(f"Error parsing expiration date: {str(e)}")
-                    # If we can't parse the date, assume it's valid and proceed
+                if not code:
+                    flash('Please enter the verification code.', 'error')
+                    conn.close()
+                    return render_template('verify_email.html', customer=customer)
                 
-                # Mark as verified
-                try:
-                    conn.execute('UPDATE email_verifications SET is_verified = 1 WHERE id = ?', (verification['id'],))
+                # Check verification code
+                verification = conn.execute('''
+                    SELECT * FROM email_verifications 
+                    WHERE customer_id = ? AND verification_code = ? AND is_verified = 0
+                    ORDER BY created_at DESC LIMIT 1
+                ''', (session['customer_id'], code)).fetchone()
+                
+                if verification:
+                    # Convert Row to dict if needed
+                    if not isinstance(verification, dict):
+                        verification = dict(verification)
                     
-                    # Check if email_verified column exists, if not add it
+                    # Check if code is expired (15 minutes)
                     try:
-                        conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
-                    except sqlite3.OperationalError as e:
-                        # Column doesn't exist, add it
-                        print(f"Adding email_verified column: {str(e)}")
-                        conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
-                        conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
+                        if verification.get('expires_at'):
+                            expires_at = datetime.strptime(verification['expires_at'], '%Y-%m-%d %H:%M:%S')
+                            if datetime.now() > expires_at:
+                                conn.close()
+                                flash('Verification code has expired. Please request a new one.', 'error')
+                                return render_template('verify_email.html', customer=customer)
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing expiration date: {str(e)}")
+                        # If we can't parse the date, assume it's valid and proceed
                     
-                    conn.commit()
+                    # Mark as verified
+                    try:
+                        conn.execute('UPDATE email_verifications SET is_verified = 1 WHERE id = ?', (verification['id'],))
+                        
+                        # Check if email_verified column exists, if not add it
+                        try:
+                            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
+                        except sqlite3.OperationalError as e:
+                            # Column doesn't exist, add it
+                            print(f"Adding email_verified column: {str(e)}")
+                            conn.execute('ALTER TABLE customers ADD COLUMN email_verified INTEGER DEFAULT 0')
+                            conn.execute('UPDATE customers SET email_verified = 1 WHERE id = ?', (session['customer_id'],))
+                        
+                        conn.commit()
+                        conn.close()
+                        
+                        flash('Email address verified successfully!', 'success')
+                        return redirect(url_for('customer_profile'))
+                    except Exception as e:
+                        import traceback
+                        print(f"Error updating verification status: {str(e)}")
+                        print(traceback.format_exc())
+                        conn.close()
+                        flash(f'Error verifying email: {str(e)}. Please try again or contact support.', 'error')
+                        return render_template('verify_email.html', customer=customer)
+                else:
                     conn.close()
-                    
-                    flash('Email address verified successfully!', 'success')
-                    return redirect(url_for('customer_profile'))
-                except Exception as e:
-                    import traceback
-                    print(f"Error updating verification status: {str(e)}")
-                    print(traceback.format_exc())
-                    conn.close()
-                    flash(f'Error verifying email: {str(e)}. Please try again or contact support.', 'error')
-                    return render_template('verify_email.html', customer=dict(customer))
-            else:
+                    flash('Invalid verification code. Please try again.', 'error')
+                    return render_template('verify_email.html', customer=customer)
+            except Exception as e:
+                import traceback
+                print(f"Error in verify_email POST: {str(e)}")
+                print(traceback.format_exc())
                 conn.close()
-                flash('Invalid verification code. Please try again.', 'error')
-                return render_template('verify_email.html', customer=dict(customer))
-        except Exception as e:
-            import traceback
-            print(f"Error in verify_email POST: {str(e)}")
-            print(traceback.format_exc())
+                flash(f'An error occurred: {str(e)}. Please try again.', 'error')
+                return render_template('verify_email.html', customer=customer)
+        
+        conn.close()
+        return render_template('verify_email.html', customer=customer)
+    except Exception as e:
+        import traceback
+        print(f"Error in verify_email: {str(e)}")
+        print(traceback.format_exc())
+        try:
             conn.close()
-            flash(f'An error occurred: {str(e)}. Please try again.', 'error')
-            return render_template('verify_email.html', customer=dict(customer))
-    
-    conn.close()
-    return render_template('verify_email.html', customer=dict(customer))
+        except:
+            pass
+        flash(f'An error occurred: {str(e)}. Please try again.', 'error')
+        return redirect(url_for('customer_profile'))
 
 @app.route('/send-verification-code', methods=['POST'])
 @customer_login_required
